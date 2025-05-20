@@ -8,5 +8,5 @@ template_args:
   apply_chat_template: False
   user_start_tag: "Question: "
   user_end_tag: "\n"
-  asst_start_tag: "Answer: "
+  asst_start_tag: "Answer"
   asst_end_tag: "\n\n"

@@ -1,9 +1,11 @@
 from trainer.unlearn.base import UnlearnTrainer
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from enum import Enum
 import os
+import math
 
 from captum.attr import LayerIntegratedGradients
 
@@ -170,15 +172,11 @@ def highlight_components(attribution_scores):
     return highlighted_components, highlighted_indices
 
 
-def correct_logit_metric(logits, forget_labels):
+def correct_logit_metric(logits, forget_tokens):
     """
-    Calculate negative probability for answer we want to forget.
+    Return cross entropy between the logits and the correct answer.
     """
-    logits_last = logits[:, -1, :]
-    logit_probs = torch.softmax(logits_last, dim=-1)
-    batch_size = logits.size(0)
-    correct_probs = logit_probs[torch.arange(batch_size), forget_labels]
-    return -correct_probs
+    return F.cross_entropy(logits, forget_tokens, reduction="sum")
 
 
 class AttributionMethod(Enum):
@@ -281,11 +279,16 @@ class LatentGradAscent(UnlearnTrainer):
     def localise_forget_components(self, model, forget_inputs, labels):
         assert model.config.name_or_path == self.hooked_model.cfg.model_name, \
             "Model and hooked model must be the same"
-        
 
         original_input = forget_inputs["input_ids"]
-        original_tokens = self.hooked_model.to_tokens(original_input, prepend_bos=False)
-        rewrite_tokens = torch.full_like(original_tokens, self.hooked_model.tokenizer.PAD_TOKEN)
+        original_input = [f"{inp}: " for inp in original_input]
+        n_samples = original_input.size(0)
+
+        rewrite_input = forget_inputs["input_ids"].clone()
+        rewrite_input = [f"{inp} (DO NOT ANSWER CORRECTLY): " for inp in original_input]
+
+        tokenised = self.hooked_model.to_tokens(original_input + rewrite_input, prepend_bos=False)
+        original_tokens, rewrite_tokens = [tokenised[i:i + n_samples] for i in range(0, len(tokenised), n_samples)]
         labels = forget_inputs["labels"]
 
         _, original_cache = self.hooked_model.run_with_cache(original_tokens)
@@ -293,11 +296,13 @@ class LatentGradAscent(UnlearnTrainer):
 
         sample_id = str(hash(original_tokens))
 
+        answer_tokens = self.hooked_model.to_tokens(labels, prepend_bos=False)
+
         mlp_attribution_highlights, attn_attribution_highlights = run_attribution_steps(
             self.hooked_model,
             original_tokens,
             rewrite_tokens,
-            labels,
+            answer_tokens,
             original_cache,
             rewrite_cache,
             sample_id,
@@ -354,6 +359,19 @@ class LatentGradAscent(UnlearnTrainer):
                 # MLP output biases of shape [d_model,] - no need to mask on specific neuron
 
 
+    def inverted_hinge_loss(output_logits, target_index):
+        logit_probs = torch.softmax(output_logits, dim=-1)
+        # Get probability of target token for each sample
+        # target_prob = torch.gather(logit_probs, dim=1, index=target_index.unsqueeze(1))
+        target_prob = logit_probs[:, target_index]
+        # Get max probability of non-target tokens
+        nontarget_probs = logit_probs.clone()
+        nontarget_probs[:, target_index] = -math.inf
+        max_nontarget_prob = torch.max(nontarget_probs, dim=-1)[0]
+        # Calculate IHL
+        return (1 + target_prob - max_nontarget_prob).sum()
+
+
     def compute_loss(self, model, inputs, return_outputs=False):
 
         forget_inputs = inputs["forget"]
@@ -363,7 +381,7 @@ class LatentGradAscent(UnlearnTrainer):
             "labels": forget_inputs["labels"],
         }
         outputs = model(**forget_inputs)
-        loss = -outputs.loss
+        loss = self.inverted_hinge_loss(outputs.logits, forget_inputs["labels"]) + 
         
         return (loss, outputs) if return_outputs else loss
     
