@@ -9,7 +9,7 @@ def download_eval_data():
         repo_id="open-unlearning/eval",
         allow_patterns="*.json",
         repo_type="dataset",
-        local_dir="saves/eval",
+        local_dir="/vol/bitbucket/mwl21/unlearning/saves/eval",
     )
 
 
@@ -18,13 +18,13 @@ def download_idk_data():
         repo_id="open-unlearning/idk",
         allow_patterns="*.jsonl",
         repo_type="dataset",
-        local_dir="data",
+        local_dir="/vol/bitbucket/mwl21/unlearning/data",
     )
 
 
 def download_wmdp():
     url = "https://cais-wmdp.s3.us-west-1.amazonaws.com/wmdp-corpora.zip"
-    dest_dir = "data/wmdp"
+    dest_dir = "/vol/bitbucket/mwl21/unlearning/data/wmdp"
     zip_path = os.path.join(dest_dir, "wmdp-corpora.zip")
 
     os.makedirs(dest_dir, exist_ok=True)
